@@ -1,149 +1,169 @@
-# SigPloit Documentation
+# SigPloit Detailed Documentation
 
-SigPloit is a signaling security testing framework dedicated to Telecom Security professionals and researchers. It allows for pentesting and exploiting vulnerabilities in signaling protocols used by mobile operators (SS7, GTP, Diameter, SIP).
+SigPloit is a professional signaling security testing framework for mobile operator interconnects. It supports SS7, GTP, and provides placeholders for Diameter and SIP.
 
 ## Table of Contents
 1. [Architecture & Project Structure](#architecture--project-structure)
-2. [SS7 Module](#ss7-module)
-    - [Location Tracking](#location-tracking)
-    - [Interception](#interception)
-    - [Fraud & Info](#fraud--info)
-    - [Denial of Service (DoS)](#denial-of-service-dos)
-3. [GTP Module](#gtp-module)
-    - [Information Gathering](#information-gathering)
-    - [Fraud](#fraud)
-    - [Configuration Options](#configuration-options)
-    - [Configuration Files](#configuration-files)
-4. [Installation & Requirements](#installation--requirements)
-5. [Usage Guide](#usage-guide)
+2. [SS7 Module Deep Dive](#ss7-module)
+    - [Attack Categories & Messages](#ss7-attacks)
+    - [Parameter Dictionary & Origins](#ss7-parameters)
+    - [Attack Surface & Vectors](#ss7-attack-surface)
+3. [GTP Module Deep Dive](#gtp-module)
+    - [Attack Categories](#gtp-attacks)
+    - [Configuration Options](#gtp-options)
+    - [IE Parameter Dictionary & Origins](#gtp-parameters)
+    - [Attack Surface & Vectors](#gtp-attack-surface)
+4. [Diameter & SIP Modules](#other-modules)
+5. [Virtual Lab & Testing (Testing/Server)](#virtual-lab)
+6. [Installation & Usage](#installation)
 
 ---
 
 ## Architecture & Project Structure
 
-The project is organized into several main modules, each targeting a different signaling protocol.
+SigPloit is built with a modular approach, separating protocol logic from the main UI.
 
-- **`sigploit.py`**: The main entry point of the framework. It provides the top-level menu to select between SS7, GTP, and future modules.
-- **`ss7main.py`**: The main controller for the SS7 module. It manages the attack categories and menus for SS7.
-- **`gtpmain.py`**: The main controller for the GTP module. It manages the attack categories and menus for GTP.
-- **`ss7/`**: Contains the logic and individual attack scripts for SS7.
-    - `ss7/attacks/`: Contains subdirectories for each attack category, housing the compiled Java `.jar` files used for execution.
-- **`gtp/`**: Contains the logic and individual attack scripts for GTP.
-    - `gtp/attacks/`: Contains the implementation of GTP attacks in Python.
-    - `gtp/config/`: Contains configuration files (`.cnf`) for GTP attacks.
-    - `gtp/gtp_v2_core/`: Contains the core GTPv2 protocol implementation and utilities.
-- **`Testing/`**: Contains server-side components for testing attacks in a lab environment.
-
----
-
-## SS7 Module
-
-The SS7 module is designed for testing 2G/3G Voice and SMS attacks. Attacks in this module are generally implemented as Java applications packaged in `.jar` files, which are called by the Python framework.
-
-### Location Tracking
-Used to identify the geographic location of a subscriber.
-
-| Message/Attack | Description | JAR Location |
-| --- | --- | --- |
-| **SendRoutingInfo (SRI)** | Location Tracking; used to route calls. Often blocked by operators. | `ss7/attacks/tracking/sri/SendRoutingInfo.jar` |
-| **ProvideSubscriberInfo (PSI)** | Reliable Location Tracking. | `ss7/attacks/tracking/psi/ProvideSubscriberInfo.jar` |
-| **SendRoutingInfoForSM (SRI-SM)** | Reliable Location Tracking via SMS. May need to be run twice if home routing is used. | `ss7/attacks/tracking/srism/SendRoutingInfoforSM.jar` |
-| **AnyTimeInterrogation (ATI)** | Location Tracking; highly effective but blocked by most operators. | `ss7/attacks/tracking/ati/AnyTimeInterrogation.jar` |
-| **SendRoutingInfoForGPRS (SRI-GPRS)** | Location tracking used for data routing; retrieves SGSN GT. | `ss7/attacks/tracking/srigprs/SendRoutingInfoForGPRS.jar` |
-
-### Interception
-Focuses on intercepting subscriber communications.
-
-| Message/Attack | Description | JAR Location |
-| --- | --- | --- |
-| **UpdateLocation (UL)** | Stealthy SMS Interception by updating the subscriber's location to an attacker-controlled GT. | `ss7/attacks/interception/ul/UpdateLocation.jar` |
-
-### Fraud & Info
-Used for gathering subscriber information or performing fraudulent activities.
-
-| Message/Attack | Description | JAR Location |
-| --- | --- | --- |
-| **SendIMSI** | Retrieving the IMSI of a subscriber. | `ss7/attacks/fraud/simsi/SendIMSI.jar` |
-| **MTForwardSMS** | SMS Phishing and Spoofing. | `ss7/attacks/fraud/mtsms/MTForwardSMS.jar` |
-| **InsertSubscriberData (ISD)** | Subscriber Profile Manipulation. | `ss7/attacks/fraud/isd/InsertSubscriberData.jar` |
-| **SendAuthenticationInfo (SAI)** | Subscriber Authentication Vectors retrieval. | `ss7/attacks/fraud/sai/SendAuthenticationInfo.jar` |
-
-### Denial of Service (DoS)
-Aims to disrupt service for subscribers or network nodes.
-
-| Message/Attack | Description | JAR Location |
-| --- | --- | --- |
-| **PurgeMS** | Mass DoS attack on subscribers to take them off the network. | `ss7/attacks/dos/prgms/PurgeMS.jar` |
+- **`sigploit.py`**: The CLI entry point. It manages the global state and main navigation.
+- **`ss7main.py` / `gtpmain.py`**: Protocol-specific controllers. They handle menu navigation and parameter preparation for their respective modules.
+- **`ss7/`**: Implements SS7/MAP logic.
+    - **Wrappers**: `tracking.py`, `interception.py`, `fraud.py`, `dos.py` wrap calls to Java-based attack engines.
+    - **Engines**: Located in `ss7/attacks/`, these are compiled Java `.jar` files that handle the low-level M3UA/SCCP/MAP stack.
+- **`gtp/`**: Implements GTPv2 logic natively in Python.
+    - **`gtp_v2_core/`**: A custom implementation of the GTPv2-C and GTPv2-U protocols.
+    - **`config/`**: Contains `.cnf` files which are essentially "Attack Templates" defining message structures.
+- **`Testing/Server/`**: A collection of Java-based simulators that act as HLRs, VLRs, or MSCs to respond to SigPloit attacks in a controlled environment.
 
 ---
 
-## GTP Module
+## SS7 Module Deep Dive <a name="ss7-module"></a>
 
-The GTP module focuses on 3G/4G data attacks occurring on IPX/GRX interconnects. Unlike SS7, these are primarily implemented in Python.
+### Attack Categories & Messages <a name="ss7-attacks"></a>
 
-### Information Gathering
+| Category | Message | Purpose | Implementation Path |
+| --- | --- | --- | --- |
+| **Location** | `SendRoutingInfo` (SRI) | Retrieve the serving MSC/VLR address. | `ss7/attacks/tracking/sri/` |
+| **Location** | `ProvideSubscriberInfo` (PSI) | Request detailed location (Cell ID) from the serving VLR. | `ss7/attacks/tracking/psi/` |
+| **Location** | `AnyTimeInterrogation` (ATI) | Direct query to HLR for subscriber state and location. | `ss7/attacks/tracking/ati/` |
+| **Interception** | `UpdateLocation` (UL) | Register the attacker's node as the new VLR for the target. | `ss7/attacks/interception/ul/` |
+| **Fraud** | `SendIMSI` | Map a phone number (MSISDN) to its internal ID (IMSI). | `ss7/attacks/fraud/simsi/` |
+| **Fraud** | `MTForwardSMS` | Inject a spoofed SMS directly to the target's MSC. | `ss7/attacks/fraud/mtsms/` |
+| **DoS** | `PurgeMS` | Inform the HLR that the subscriber has been "purged" from the VLR. | `ss7/attacks/dos/prgms/` |
 
-| Attack | Description | Python Script |
+### Parameter Dictionary & Origins <a name="ss7-parameters"></a>
+
+| Parameter | Technical Meaning | Source / How to Obtain |
 | --- | --- | --- |
-| **GTP Nodes Discovery** | Network Element Discovery using EchoRequest, CreateSession, DeleteSession, or DeleteBearer messages. | `gtp/attacks/info/discover_gtp_nodes.py` |
-| **TEID Allocation Discovery** | TEID Discovery using CreateSession, ModifyBearer, or CreateBearer messages. | `gtp/attacks/info/discover_teid_allocation.py` |
+| **MSISDN** | Mobile Station International Subscriber Directory Number. | Public knowledge; the target's phone number. |
+| **IMSI** | International Mobile Subscriber Identity. | Obtained via `SendIMSI` or `SRI` responses. Private ID. |
+| **GT (Global Title)** | The "IP Address" of the SS7 node (e.g., HLR GT, VLR GT). | Obtained from `SRI` or `SRI-SM` responses; indicates the serving node. |
+| **PC (Point Code)** | Physical node address in the SS7 network. | Obtained via network discovery or provided by the signaling provider. |
+| **SSN (Subsystem)** | Specific service on a node (HLR=6, VLR=7, MSC=8, gsmSCF=147). | Standardized values defined by ITU-T/3GPP. |
+| **RI (Routing Indicator)** | Defines if routing is based on GT or PC + SSN. | Configuration choice based on network topology. |
 
-### Fraud
+### Attack Surface & Vectors <a name="ss7-attack-surface"></a>
 
-| Attack | Description | Python Script |
-| --- | --- | --- |
-| **Tunnel Hijack** | TEID Hijack using ModifyBearerRequest messages. | `gtp/attacks/fraud/tunnel_hijacking.py` |
+The **SS7 Attack Surface** is the global signaling interconnect network (SIGTRAN/M3UA). Access is typically gained via:
+1. **Low-cost Signaling Providers**: Companies that sell access to the SS7 network for legitimate services (A2P SMS) but often have weak vetting.
+2. **Compromised Network Nodes**: Gaining access to a small operator's STP (Signaling Transfer Point) or HLR/VLR.
 
-### Configuration Options
-GTP attacks use a command-line interface within SigPloit to set parameters.
-
-- **`config`**: Path to the configuration file (`.cnf`).
-- **`target`**: The target network or IP (e.g., `10.10.10.1/32` or `10.10.10.0/24`).
-- **`listening`**: Boolean (True/False) to indicate if the tool should wait for replies from the target.
-- **`verbosity`**: Level of output detail (default: 2).
-- **`output`**: File to save results (default: `results.csv`).
-
-### Configuration Files
-Located in `gtp/config/`, these files define the structure of the GTP messages sent during attacks.
-
-- **`EchoRequest.cnf`**: Used for node discovery.
-- **`CreateSession.cnf`**: Used for node and TEID discovery.
-- **`DeleteSession.cnf`**: Used for node discovery.
-- **`DeleteBearer.cnf`**: Used for node discovery.
-- **`ModifyBearer.cnf`**: Used for TEID discovery and tunnel hijacking.
-- **`TunnelHijack.cnf`**: Specific for tunnel hijacking attacks.
+#### Detailed Attack Vector: SMS Interception (The "UpdateLocation" Attack)
+This is one of the most critical attack vectors in SigPloit.
+1. **Discovery**: The attacker uses `SendIMSI` with the target's **MSISDN** to retrieve the **IMSI** and the **HLR GT**.
+2. **Spoofing**: The attacker sends a `MAP_UPDATE_LOCATION` message to the target's **HLR**.
+   - The message contains the target's **IMSI**.
+   - The **Originating GT** is set to the attacker's own Global Title (pretending to be a new VLR the target just roamed into).
+3. **Execution**: The **HLR**, believing the subscriber has moved, sends a `MAP_CANCEL_LOCATION` to the real VLR (disconnecting the user) and sends the `MAP_INSERT_SUBSCRIBER_DATA` (subscriber profile) to the attacker.
+4. **Intercept**: The **HLR** now thinks the attacker's node is the serving VLR. Any incoming SMS or call for the target is routed to the attacker.
 
 ---
 
-## Installation & Requirements
+## GTP Module Deep Dive <a name="gtp-module"></a>
+
+### Attack Categories <a name="gtp-attacks"></a>
+
+- **Information Gathering**: Discovering GTP-capable nodes (SGW, PGW, MME) and active Tunnel Endpoint Identifiers (TEIDs).
+- **Fraud (Tunnel Hijacking)**: Redirecting user data traffic by updating the session information in the core network.
+- **DoS**: Dropping sessions or connections by spoofing management messages.
+
+### Configuration Options <a name="gtp-options"></a>
+
+GTP attacks use a CLI shell with the following commands:
+- `set target <IP/CIDR>`: The IP address or range of the target GSN/SGW/PGW.
+- `set config <path>`: Points to a `.cnf` file in `gtp/config/` (the "payload").
+- `set listening <True/False>`: Whether to wait for and log response packets.
+- `set verbosity <1-3>`: Level of detail in the console output.
+
+### IE Parameter Dictionary & Origins <a name="gtp-parameters"></a>
+
+Configured within `.cnf` files in the `[IES]` section:
+
+| Parameter | Description | Source / Origin |
+| --- | --- | --- |
+| **TEID** | Tunnel Endpoint Identifier. | Discovered via `TEID Allocation Discovery` or `GTP Nodes Discovery`. |
+| **MCC / MNC** | Mobile Country Code / Mobile Network Code. | Publicly available codes for every operator (e.g., 222/88 for TIM Italy). |
+| **APN** | Access Point Name. | Often standardized (e.g., `wap.tim.it`, `internet`, `ims`). |
+| **RAT Type** | Radio Access Technology (1:UTRAN, 2:GERAN, 6:E-UTRAN). | Depends on the target generation (3G vs 4G). |
+| **F-TEID** | Fully Qualified TEID (IP + TEID). | The attacker's IP and a chosen TEID for redirection. |
+| **EBI** | EPS Bearer ID. | Typically 5 for the default bearer; can be discovered. |
+| **LAC / RAC** | Location Area Code / Routing Area Code. | Discovered via signaling or network proximity. |
+| **NIT** | Node ID Type (0:IPv4, 2:FQDN). | Technical choice based on target configuration. |
+| **Cause** | Error code for `Delete Bearer` (e.g., 3: Reactivation Requested). | Used to trigger specific behaviors in the target node. |
+
+### GTP Attack Surface & Vectors <a name="gtp-attack-surface"></a>
+
+The **GTP Attack Surface** is the GPRS Roaming eXchange (GRX) or IP eXchange (IPX). These are private IP networks that connect mobile operators.
+
+#### Detailed Attack Vector: Tunnel Hijacking
+1. **Reconnaissance**: Attacker uses `GTP Nodes Discovery` to find the IP of a PGW and `TEID Allocation Discovery` to find active sessions.
+2. **Exploitation**: Attacker sends a `Modify Bearer Request` to the **SGW**.
+   - The message targets a specific **TEID**.
+   - It specifies a new **F-TEID** (S-GW address for the User Plane) which points to the attacker's IP.
+3. **Redirection**: The **PGW** updates the tunnel information. All data packets originating from the internet for that subscriber are now encapsulated and sent to the attacker's IP instead of the real SGW.
+
+---
+
+## Diameter & SIP Modules <a name="other-modules"></a>
+
+As of Version 1.1 (BETA), these modules are placeholders for future releases:
+- **Diameter**: Targeting 4G LTE Roaming interconnects. Currently displays a "will be updated in version 3" message.
+- **SIP**: Targeting VoLTE and IMS infrastructure. Currently displays a "will be updated in version 4" message.
+
+---
+
+## Virtual Lab & Testing (Testing/Server) <a name="virtual-lab"></a>
+
+SigPloit includes a comprehensive set of "Vulnerable Servers" for safe testing.
+
+### Available Simulators
+- **Location Tracking Servers**: `AnyTimeInterrogation_Server`, `ProvideSubscriberInfo_Server`, etc.
+- **Fraud Servers**: `SendIMSI_Server`, `MTForwardSMS_Server`.
+- **Interception Servers**: `UpdateLocation_Server`.
+
+### Lab Workflow
+1. **Launch Server**: Go to `Testing/Server/Attacks/...` and run `java -jar <Server>.jar`.
+2. **Identify Hardcoded Parameters**: Read the `README_Instructions` in the server folder.
+   - *Example*: `AnyTimeInterrogation_Server` expects the attacker at `192.168.56.101:2905` and responds to MSISDN `96599657765`.
+3. **Configure SigPloit**: In `sigploit.py`, use the parameters specified in the server's README to ensure the message is accepted and processed by the simulator.
+
+---
+
+## Installation & Usage <a name="installation"></a>
 
 ### Prerequisites
-- **Operating System**: Linux (recommended: Ubuntu/Debian)
-- **Python**: 2.7
-- **Java**: 1.7 or higher
-- **Dependencies**: `lksctp-tools` (run `sudo apt-get install lksctp-tools`)
+- **Linux** (Tested on Ubuntu/Debian).
+- **Python 2.7**.
+- **Java 1.7+**.
+- **lksctp-tools**: Required for SCTP/SIGTRAN communication. Install via `sudo apt-get install lksctp-tools`.
 
-### Setup
-1. Clone the repository.
-2. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Running SigPloit
+```bash
+# Install Python dependencies
+sudo pip install -r requirements.txt
 
----
-
-## Usage Guide
-
-1. **Start SigPloit**:
-   ```bash
-   python sigploit.py
-   ```
-2. **Main Menu**: Choose the signaling protocol (0 for SS7, 1 for GTP).
-3. **Attack Categories**: Select an attack category (e.g., Location Tracking for SS7).
-4. **Execute Attack**:
-   - For **SS7**: Select the specific message/attack. The framework will launch the corresponding Java application. Follow the on-screen prompts.
-   - For **GTP**:
-     - Use `show options` to see current parameters.
-     - Use `set <option> <value>` to configure (e.g., `set target 1.2.3.4`).
-     - Use `run` to execute the attack.
-5. **Navigation**: Use `back` to return to previous menus or `exit`/`quit` to leave the framework.
+# Start the framework
+python sigploit.py
+```
+1. Select **Protocol** (0 for SS7, 1 for GTP).
+2. Select **Attack Category**.
+3. Fill in the **Parameters** (Origins described in the dictionaries above).
+4. View the output in the console or the designated `results.csv` (for GTP).
